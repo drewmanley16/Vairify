@@ -6,3 +6,6 @@ dist/
 *.log
 apps/web/node_modules/
 apps/web/.next/
+contracts/cache/
+contracts/out/
+*.tsbuildinfo
