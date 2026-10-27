@@ -4,6 +4,5 @@ out/
 dist/
 .env.local
 *.log
-contracts/lib/
 apps/web/node_modules/
 apps/web/.next/
