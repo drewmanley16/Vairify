@@ -1,0 +1,29 @@
+"use client";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useAccount, useReadContract, useReadContracts } from "wagmi";
+import { Button, Card, Badge, Input } from "@/components/ui";
+import { ESCROW_ABI, STATES, normalizePayment, type Payment } from "@/lib/abi";
+import { ESCROW_ADDRESS, USDC_ADDRESS, hasEscrow } from "@/lib/config";
+import { ERC20_ABI } from "@/lib/abi";
+import { fmtDate, fmtUSDC, localPaymentIds } from "@/lib/format";
+
+export default function Dashboard() {
+  const { address, isConnected } = useAccount(); const [filter, setFilter] = useState<"all" | "action" | "pending" | "completed" | "cancelled">("all"); const [extraId, setExtraId] = useState("");
+  const { data: nextId } = useReadContract({ address: hasEscrow ? ESCROW_ADDRESS : undefined, abi: ESCROW_ABI, functionName: "nextPaymentId", query: { enabled: hasEscrow } });
+  const ids = useMemo(() => { const fromChain: bigint[] = []; if (nextId && nextId > 1n) { const start = nextId > 51n ? nextId - 50n : 1n; for (let i = start; i < nextId; i++) fromChain.push(i); } const merged = new Map<string, bigint>(); [...localPaymentIds(), ...fromChain].forEach(i => merged.set(i.toString(), i)); if (extraId) { try { merged.set(BigInt(extraId).toString(), BigInt(extraId)); } catch {} } return [...merged.values()]; }, [nextId, extraId]);
+  const reads = useReadContracts({ contracts: ids.map(i => ({ address: ESCROW_ADDRESS, abi: ESCROW_ABI, functionName: "getPayment" as const, args: [i] })), query: { enabled: hasEscrow && ids.length > 0 } });
+  const payments: Payment[] = useMemo(() => (reads.data ?? []).map(r => r.status === "success" ? normalizePayment(r.result) : null).filter(Boolean) as Payment[], [reads.data]);
+  const mine = payments.filter(p => address && (p.sender.toLowerCase() === address.toLowerCase() || p.recipient.toLowerCase() === address.toLowerCase()));
+  const action = mine.filter(p => (p.state === 0 && p.recipient.toLowerCase() === address?.toLowerCase()) || (p.state === 1 && p.sender.toLowerCase() === address?.toLowerCase()));
+  const pending = mine.filter(p => p.state === 0 || p.state === 1); const completed = mine.filter(p => p.state === 2); const cancelled = mine.filter(p => p.state === 3);
+  const shown = filter === "all" ? mine : filter === "action" ? action : filter === "pending" ? pending : filter === "completed" ? completed : cancelled;
+  const { data: usdcBal } = useReadContract({ address: USDC_ADDRESS, abi: ERC20_ABI, functionName: "balanceOf", args: address ? [address] : undefined, query: { enabled: !!address } });
+  if (!hasEscrow) return <Card><h1 className="text-2xl font-bold">Dashboard</h1><p className="mt-2 text-sm">Escrow contract not configured. Set NEXT_PUBLIC_VAIRIFY_ESCROW_ADDRESS in apps/web/.env.local, then restart. No balances or history are shown until a real contract is configured.</p></Card>;
+  return <div className="space-y-6"><div className="flex flex-wrap items-center justify-between gap-3"><h1 className="text-3xl font-bold">Dashboard</h1><Link href="/send"><Button>New transfer</Button></Link></div>
+    <Card><p className="text-sm text-zinc-500">Connected wallet</p><p className="break-all font-mono text-sm">{address ?? "Not connected"}</p><p className="mt-2 text-sm">USDC balance (on-chain): {usdcBal !== undefined ? `${fmtUSDC(usdcBal as bigint)} USDC` : "—"}</p><p className="mt-2 text-xs text-zinc-500">Listing limitation: this MVP reads payments by scanning the most recent 50 payment IDs via nextPaymentId, plus IDs saved in this browser and any ID you enter below. It does not use a separate indexer. Older payments outside that window will not appear unless you enter their ID.</p><div className="mt-3 flex gap-2"><Input placeholder="Look up payment ID, e.g. 3" value={extraId} onChange={e => setExtraId(e.target.value)} /><Button className="bg-white text-zinc-900 border border-zinc-300 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-white dark:border-zinc-700" onClick={() => {}}>Look up</Button></div></Card>
+    <div className="grid gap-4 md:grid-cols-4">{[["Requiring action", action.length], ["Pending", pending.length], ["Completed", completed.length], ["Cancelled / expired", cancelled.length]].map(([t, n]) => <Card key={t as string}><p className="text-sm text-zinc-500">{t}</p><p className="text-3xl font-bold">{n}</p></Card>)}</div>
+    <div className="flex flex-wrap gap-2">{(["all", "action", "pending", "completed", "cancelled"] as const).map(f => <button key={f} onClick={() => setFilter(f)} className={`rounded-full border px-3 py-1.5 text-sm font-medium ${filter === f ? "bg-teal-700 text-white border-teal-700" : "border-zinc-300 dark:border-zinc-700"}`}>{f}</button>)}</div>
+    <Card><h2 className="font-semibold">Transaction history</h2>{!isConnected ? <p className="mt-2 text-sm text-zinc-500">Connect a wallet to see your transfers.</p> : shown.length === 0 ? <p className="mt-2 text-sm text-zinc-500">No transfers found for this wallet in the scanned range.</p> : <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="text-zinc-500"><th className="py-2 pr-3">ID</th><th className="py-2 pr-3">Total</th><th className="py-2 pr-3">Recipient</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3">Expires</th><th /></tr></thead><tbody>{shown.map(p => <tr key={p.paymentId.toString()} className="border-t dark:border-zinc-800"><td className="py-2 pr-3">{p.paymentId.toString()}</td><td className="py-2 pr-3">{fmtUSDC(p.totalAmount)}</td><td className="py-2 pr-3 font-mono text-xs">{p.recipient.slice(0, 10)}…</td><td className="py-2 pr-3"><Badge tone={p.state === 2 ? "ok" : p.state === 3 ? "bad" : "warn"}>{STATES[p.state]}</Badge></td><td className="py-2 pr-3">{fmtDate(p.expiration)}</td><td><Link href={`/transfer/${p.paymentId}`} className="text-teal-700">View</Link></td></tr>)}</tbody></table></div>}</Card>
+  </div>;
+}
